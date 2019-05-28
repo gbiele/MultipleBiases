@@ -1,0 +1,779 @@
+---
+title: "Confounding and selection bias when estimating treatment effects from observational data"
+subtitle: "Some simulations"
+author: "Guido Biele"
+date: "`r Sys.Date()`"
+output:
+  tufte::tufte_html: default
+  tufte::tufte_book:
+    citation_package: natbib
+    latex_engine: xelatex
+  tufte::tufte_handout:
+    citation_package: natbib
+    latex_engine: xelatex
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE,
+                      cache.extra = packageVersion('tufte'),
+                      fig.margin = TRUE,
+                      warning = F,
+                      message = F,
+                      results = "hide",
+                      fig.width = 4,
+                      fig.height = 4)
+options(htmltools.dir.version = FALSE)
+```
+
+```{r simsetup, echo=F}
+N = 250
+K = 500
+source("dag_utils.R")
+```
+
+
+# Directed cyclic graphs (DAGs)
+
+Directed acyclic graphs allow to represent causal associations by combining nodes as representations of variables and directed edges (arrows) as representation of causal effects. For example, the following DAG shows that the _Exposure_ psycho-social treatment $Tr$ causes a change in the _Outcome_ symptom strength $Sy$.
+
+```{r, fig.width=2, fig.height=2}
+exDAG = dagitty("
+Tr E @0,0
+Sy O @1,0
+
+Tr Sy
+")
+plot_dag(exDAG)
+```
+
+
+Often, causal relationships will be more complicated. For example, treatment effects could be mediated by parental behavior $pB$, such that the **_chain_** $Tr \rightarrow pB \rightarrow Sy$ opens a second, indirect path from $Tr$ to $Sy$.
+
+```{r, fig.width=2, fig.height=2}
+exDAG = dagitty("
+Tr E @0,0
+Sy O @1,0
+pB 1 @0.5,-0.5
+
+Tr Sy
+Tr pB
+pB Sy
+")
+plot_dag(exDAG, curves = F)
+```
+
+If a researcher were interested only in the direct treatment effect, a statistical analysis would need to close the indirect path. When analysing the data with a regression model, this would be done by including $pB$ into a regression model. Specifically, in a regression model `lm(Sy ~ Tr)`^[This R command implements a linear regression model, where the R-formula $Sy \sim Tr$ means "regress $Sy$ on $Tr$"] the regression coefficient $\beta_{Tr}$ would estimate the total effect of treatment, and in a regression `lm(Sy ~ Tr + pB)` the coefficient $\beta_{Tr}$ would estimate the direct effect of treatment.
+
+Another type of indirect open path between exposure and outcome involves _forks_, which occur when a third variable causes two other variables. For example, it is possible that prior symptoms $pSy$ affect if one receives a treatment and how strong the symptoms are after treatment:
+
+```{r, fig.width=2, fig.height=2}
+exDAG = dagitty("
+Tr  E @0,0
+Sy  O @1,0
+pSy 1 @0.5,0.5
+
+Tr  Sy
+pSy Tr Sy
+")
+plot_dag(exDAG, curves = F)
+```
+
+Prior symptoms are a common cause of treatment and symptoms after treatment, and open a _backdoor path_ from treatment to symptoms. As such it can cause an association between treatment and symptoms, even if treatment does not effect symptoms. If one wants to estimate the effect from treatment on symptoms while making sure that the estimate is not "contaminated" by the common cause prior symptoms, one has to close the backdoor path $Tr \leftarrow pSy \rightarrow Sy$. This can again be done by including the variable $pSy$ in a regression model, i.e. `lm(Sy ~ Tr + pSy)`.
+
+The backdoor paths involving the _chain_ $Tr \rightarrow pB \rightarrow Sy$ or the _fork_ $Tr \leftarrow pSy \rightarrow Sy$ are open, because information can flow through $pB$ to $Sy$ or from $pSy$ to $Tr$ and $Sy$. Information cannot flow through an _inverted fork_ or _collider_, i.e. if two arrows point to third variable. For example treatment and symptoms both affect scholastic performance ($Tr \rightarrow sP \leftarrow Sy$). 
+
+```{r, fig.width=2, fig.height=2}
+exDAG = dagitty("
+Tr E @0,0
+Sy O @1,0
+sP 1 @0.5,0.5
+
+Tr Sy sP
+Sy sP
+")
+plot_dag(exDAG, curves = F)
+```
+
+An analysis that wants to estimate the effect of treatment should not adjust for scholastic performance, because adjusting for (conditioning on) a collider opens the previously closed path via scholastic performance.
+
+In sum, these examples should illustrate following properties of DAGs
+
+* direct causal effects are represented by edges from an exposure to an outcome node
+
+* associations between node variables can emerge in absence of direct causal effects, when there are alternative open backdoor paths from the exposure node to the outcome node
+
+* paths that include forks or chains but no colliders are open
+
+* paths that do include a collider are closed
+
+* an open path can be closed by conditioning on (adjusting for) one of the variables in the middle of a fork or chain
+
+* paths that are closed due to a collider are opened by conditioning on (adjusting for) the collider or its descendant. ^[$B$ and $C$ are a descendants of $A$ if they come after $A$ on the causal path, as in $A \rightarrow B \rightarrow C$]
+
+
+# Bias when estimating treatment effects from observational studies
+
+Estimating treatment effects from observational studies is made difficult by three potential biases:
+
+* bias from non-random treatment selection (endogeneity, confounding by indication)
+* bias from self-selection into the study (sample selection)
+* bias from loss to follow up (sample selection)
+
+While these descriptions of bias are different than a direct reference to an underlying structural model, the two ways to categorize bias are closely related, as the following table shows^[To complicate matters further, selection bias from non-random participation or loss to follow up can result either from conditioning on the collider or from participation predictors acting as effect modifiers. For now, this document does not treat effect modifiers]:
+
+```{r bias_table, results = "asis", echo = F}
+library(kableExtra)
+bias_table = matrix(c("X","","","","X","X"), ncol = 2, nrow = 3)
+colnames(bias_table) = c("confounding bias", "collider bias")
+rownames(bias_table) = c("non-random treatment",
+                        "self-selection into study",
+                        "loss to follow up")
+add_header_above(kable(bias_table),
+                 c(" " = 1, "structural model" = 2))
+
+```
+
+
+As we have seen earlier, bias does not necessarily need to be removed at the location it originates, but can be corrected by closing a backdoor path at any location. Therefore, correction for bias should preferably start with a structural model that describes treatment selection and self selection into the study (and/or loss to follow up), rather than defaulting to for example propensity score adjustment or inverse probability of treatment weighting as a method to correct for non-random treatment selection.
+
+## Directed Acyclic Graph of bias due to confounding 
+
+Structural models define *bias due to confounding* as bias that manifests if the same variable $L$ determines the type of treatment (e.g., treatment ($X=1$) vs. no treatment ($X=0$)) and also determines the outcome of interest Y.
+
+
+```{r DAGconfounding,  fig.cap="\\label{fig:conf}Confounder bias due to selective treatment", warning = F, fig.height=3}
+
+confDAG = dagitty("
+L 1 @0,0
+X E @-1,-1
+Y O @1,-1
+
+L X Y
+")
+plot_dag(confDAG)
+```
+
+To see this more clearly, we can simulate data from this DAG where there is no direct effect of $X$ on $Y$^[`Y = L + X + rnorm(N)` would simulate an effect $X \rightarrow Y$] and examine the association of $X$ and $Y$.
+
+```{r DAGconfoundingplot,  fig.cap="\\label{fig:conf}Non causal association from confounding bias due to selective treatment", warning = F, fig.height=3}
+
+L = rnorm(N)
+X = L + rnorm(N)
+Y = L + rnorm(N)
+
+par (mar=c(3,3,2,1), mgp=c(1.25,.25,0), tck=-.01)
+plot(X,Y, bty = "n")
+abline(lm(Y~X), col = "red")
+```
+
+
+
+## Directed Acyclic Graphs of collider bias
+
+Bias due to _loss to follow up_ emerges through conditioning on a collider, here participation $S$. A simple situation where loss to follow up leads to selection bias is when the outcome of the treatment determines participation. In the DAG to the right $\large \circledS$ indicates conditioning on this variable. This happens if only a sub-set of the study population with a specific value of $S$ is analyzed.
+
+```{r DAGselectionb, warning = F, fig.cap="\\label{fig:selb} Selection bias due to loss to follow up", fig.height=3}
+selDAGb = dagitty("
+S A @0,0
+X E @-1,-1
+Y O @1,-1
+
+X S
+Y S
+")
+plot_dag(selDAGb)
+```
+
+We can visualize the effect by showing the association of $X$ and $Y$ in the full and the selected sample:
+
+```{r DAGselectionbplot, warning = F, fig.cap="\\label{fig:selb} Non-causal association after selection bias due to loss to follow", fig.height=3}
+X = rnorm(N)
+Y = rnorm(N)
+S = inv.logit(X + Y + rnorm(N)) > .5
+
+par (mar=c(2,2,1,1), mgp=c(1.25,.25,0), tck=-.01)
+plot(X,Y, pch = 16, col = "grey")
+points(X[S],Y[S], col = "red")
+abline(lm(Y~X), col = "grey")
+abline(lm(Y[S]~X[S]), col = "red")
+mtext("selected sample", col = "red", line = 0, adj = 1)
+mtext("selected sample", col = "red", line = 0, adj = 1)
+```
+
+
+This type of bias cannot be corrected, if $Y$ still varies a lot after $X$ (or other variables) are known. In this case, it is impossible to predict participation. However, participation propensities would be needed to calculate inverse probability of participation weights, which are needed to control for (most forms of) selection bias. ^[There is also the possibility of selection bias without conditioning on collider, bias due to effect modification. When participation depends on L, and the effect of X varies across levels of L--L modifies the effect of X--bias will manifest]
+
+The next figure shows bias due to loss to follow up that can be corrected. Here, $L$ predicts the outcome and, importantly, together with the treatment choice $X$ also continued participation. Therefor, conditioning on participation ($S$) opens a backdoor path.
+
+```{r DAGselection, warning = F, fig.cap="\\label{fig:sela} Bias due to self selection into the study", fig.height=3}
+
+selDAG = dagitty("
+S A @0,-1
+X E @-.65,0
+Y O @.65,0
+L 1 @0,1
+
+L Y S
+X S
+")
+
+plot_dag(selDAG)
+```
+
+
+_Unobserved variables_ can also play the role of the node that completes a backdoor path. For example, whereas it is unproblematical if the treatment choice affects continued participation as long as participation remains independent of the outcome, bias emerges if an additional unobserved variable connects predictors of study participation and outcome:
+
+```{r selDAGcolU1, warning = F, fig.cap="\\label{fig:sela} Bias due to loss to follow up", fig.height=3}
+
+selDAGcolU1 = dagitty("
+X E @-1,0 
+L 1 @-.25,0 
+S A @.25,0 
+Y O @1,0 
+U U @-1,-.5 
+
+U L Y
+X L
+L S
+")
+
+
+plot_dag(selDAGcolU1, curves = F)
+```
+
+
+
+Another example for bias due to conditioning on a collider is a structural model of either self selection in to a study or loss to follow up. 
+
+```{r selDAGcolU2, warning=FALSE, message=FALSE, fig.cap="\\label{fig:selcol}Bias due to loss to follow up or self selection into the study", fig.height=3}
+selDAGcolU2= dagitty("
+X  E @0.00,0
+L  1 @0.50,0
+S  A @0.75,0
+Y  O @1.00,0
+U1 U @0.25,1
+U2 U @0.25,-1
+
+U1 X L 
+U2 Y L 
+L  S
+")
+
+plot_dag(selDAGcolU2, curves = F)
+```
+
+Finally, we can combine the last to examples to obtain structural models of combined selection bias and loss to follow up. In the figure to the right $S1$ stands for self selection into the study and $S2$ stands for loss to follow up.
+
+```{r sellossDAGcol, warning = F, fig.cap="\\label{fig:sela} Bias due to self selection and loss to follow up", fig.height=3}
+sellossDAGcol = dagitty("
+X  E @0,0
+L1 1 @0.75,0
+L2 1 @0,-1
+S1 A @0.50,0
+S2 A @0.25,0
+Y  O @1,0
+U1 U @0.25,1
+U2 U @0.5,-1
+
+U1 X L1
+U2 Y L1 L2
+X L2
+L1 S1
+L2 S2
+S1 S2
+")
+
+plot_dag(sellossDAGcol)
+```
+
+## Bias due to confounding and selection
+
+Importantly, it is possible and plausible that a study suffers from both confounding and loss to follow up (conditioning on a collider) bias. The following figure shows this:
+
+```{r DAGconfselU, warning = F, fig.cap="\\label{fig:consel} Bias due to confounding and selection", fig.height=3}
+selconfonPathDAGU = dagitty("
+X  E @0.00,0
+L2 1 @0.50,0
+L  1 @0.50,.75
+S  A @0.75,0
+Y  O @1.00,0
+U1 U @0.4,.45
+U2 U @0.4,-.45
+
+U1 X L2
+U2 Y L2
+L2 S
+L  X
+L  Y
+")
+
+plot_dag(selconfonPathDAGU)
+```
+
+Here, the the partial DAG without the node $L$ and the edges orignating from it shows selection bias as an result of conditioning on a descendent of a collider, and $L$ adds confounding.
+
+# Correcting Bias
+
+Under the condition that the relevant data were collected, it is possible to correct for bias through ^[This list is somewhat orthogonal to the broader literature on propensity score adjustment for non-random selection into treatment. Adjusted regression and propensity score based matching, stratification, weighting and adjustment can in certain situations both remove bias. Some authors prefer propensity score based correction over adjustment for practical reasons (Austin, 2011). My understanding is that advantages of propensity scores become more important if the number of potential confounders is large, which is not the case for the examples treated here.]:
+
+* Adjusted regression (AR) includes the confounding variable as a co-variate in the regression analysis 
+* Multilevel regression and post-stratification (MRP) or direct standardization. Here effects are estimated for sub-groups of the population using a hierarchical regression model and then population level estimates are calculated by weighting sub-groups according to their proportion of the target population.
+* Inverse probability weighting (IPW): Here weights are used to balance either treatment groups (when correcting for non-random treatment selection) or the study sample and the target population (when correcting for self-selection or loss to follow up) with respect to the treatment or participation predictors. Weights are the inverse of the probability to receive a treatment (or to participate in the study) and are used in the regression analysis. 
+
+There is no simple one to one mapping of correction method to different types of bias. The general rule is that when bias is defined by an open path from treatment to outcome other then the direct path, then a correction method has to close this path again. AR, MRP, or IPW analyses can either open a path (create bias) or close a path (correct bias), dependent on the underlying DAG. As we shall see, bias does not need to be correct at the location in a DAG where it was generated. It is sufficient to close a path at any location.
+
+## Adjustment for confounding
+It is simple to remove confounding bias by adjusting for the confounding variable. To show this, we 
+
+* simulate data from the DAG after having specified parameters for the data generating process
+* estimate regression models with and without adjustment
+* compare the results of the adjusted and unadjusted regressions with the true data generating parameters.
+
+To keep things simple, we determine that
+
+* exogenous variables are normally distributed with a mean of zero and a standard deviation of 1
+* error terms are normally distributed with a mean of zero and a standard deviation of 1 (and the error term for participation has sd=2)
+* the effect $X \rightarrow Y$ is zero
+* all other effects have the magnitude 1
+
+Then, we can generate data for a situation with confounding bias as follows.^[`rnorm` is the R command to generate random variables from a normal distribution. We only specify the number of random variables, as the default values for mean and standard deviation are 0 and 1, respectively.]
+
+```{r DataSim}
+L = rnorm(N)
+X = L + rnorm(N)
+Y = L + rnorm(N)
+```
+
+To simplify things, I have made a function to simulate data from a DAG given the parameters described above:
+
+```{r simulate_confDag}
+dt = sim_dag(confDAG)
+```
+
+
+With this data we run an adjusted and an unadjusted regression:
+
+```{r regresssion, results = "asis"}
+unadjusted_model = lm(Y ~ X,    dt)
+adjusted_model =   lm(Y ~ X + L, dt)
+```
+
+```{r regresssiontable, results = "asis", echo = F}
+tbl = rbind(c(coef(unadjusted_model),NA),
+            coef(adjusted_model))
+rownames(tbl) = c("unadjusted_model","adjusted_model")
+colnames(tbl)[3] = "L"
+kable(tbl, digits = 2,
+      caption = "Regression coefficients from adjusted and unadjusted regression models")
+```
+
+Because the true effect from X on Y is zero, the regression coefficient for X should be (close to) zero, which it is only for the adjusted model.
+
+We can robustify and visualize this comparison by repeating the above process and plotting histograms of coefficients for X from the two models.
+
+
+```{r SIMconfounding, fig.cap="\\label{fig:adjustment} Simulation of bias when a confounder is present.", fig.width=4, fig.height=6}
+
+betas = matrix(NA,nrow = K, ncol = 2)
+colnames(betas) = c("unadjusted","adjusted")
+
+for (k in 1:K) {
+  dt = sim_dag(confDAG)
+  betas[k,] = c(coef(lm(Y ~ X,dt))[2],
+                coef(lm(Y ~ X + L,dt))[2])
+}
+
+plot_daghist(confDAG,
+             betas)
+```
+
+As expected, the coefficients for the adjusted analysis are around the true value of zero, whereas the unadjusted analysis results in strong bias. Adjustment for a confounder removes bias because it closes the path from Y to X via L by conditioning our analysis on L.
+
+
+## Adjustment for loss to follow up
+
+For simple situations, selection bias can be controlled not only through inverse probability of participation weighting, but also through adjustment of participation predictors L. We first simulate the effect of adjustment.
+
+```{r SIMselectionadjustment, warning = F, fig.cap="\\label{fig:adjustment} Simulation of bias under loss to follow up.", fig.width=4, fig.height=6}
+library(boot)
+betas = matrix(NA,nrow = K, ncol = 2)
+colnames(betas) = c("unadjusted","adjusted")
+
+for (k in 1:K) {
+  dt = sim_dag(selDAG)
+  dts = dt[P == T]
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+}
+
+plot_daghist(selDAG,
+             betas)
+```
+
+Adjustment works here because the path between $X \rightarrow S \leftarrow L \rightarrow Y$ that was opened by conditioning in the collider $(S)$ can be closed by adjusting for $(L)$. 
+
+To calculate inverse probability of participation weights (IPW) we 
+
+* fit a selection model, i.e. we run a logistic regression to obtain estimated participation probabilities (propensities) for each person and
+* calculate weights as 1 divided by the participation probability.
+
+
+```{r IPW, fig.cap="\\label{fig:IPWhist} Participation probabilities ans weights", fig.width=4, fig.height=5}
+selection_model = 
+  glm(P ~ L + X, data = dt, family = binomial)
+participation_probability = 
+  predict(selection_model, type = "response")[dt$P]
+
+IPW = 1/participation_probability
+
+par(mar=c(3,3,.1,.1), mfrow = c(2,1),
+    mgp=c(2,.7,0), tck=-.01)
+cols = rep("red",N)
+cols[dt$P] = "green4"
+cols = adjustcolor(cols, alpha = .4)
+plot(dt$L+dt$X,
+     predict(selection_model, type = "response"),
+     ylab = "estimated particip. probab.",
+     col = cols,
+     pch = 16)
+legend("topleft",
+       pch = 16,
+       col = adjustcolor(c("green4","red"), alpha = .5),
+       legend = c("Yes","No"),
+       title = "Participation",
+       bty = "n")
+hist(1/participation_probability,
+     breaks = 25,
+     col = adjustcolor("green4", alpha = .5),
+     border = NA,
+     main = "")
+```
+
+
+Weights calculated this way can be used in a regression model to control for selection bias.
+
+```{r SIMselectionweighting, warning = F, fig.cap="\\label{fig:weight} Simulation of bias under loss to follow up.", fig.width=4, fig.height=3}
+betas = matrix(NA,nrow = K, ncol = 3)
+colnames(betas) = c("unadjusted",
+                    "adjusted",
+                    "IPW")
+for (k in 1:K) {
+  dt = sim_dag(selDAG)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt[,list(L,X)])
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X,     dts, weights = IPW))[2]
+}
+plot_hists(betas)
+```
+
+In this case, weighting reduces bias less well than adjustment. This result is also confirmed by the following table:
+
+
+```{r SIMconfAdjvsWghtTable, echo=F, fig.width=4, fig.height=3, results = "asis"}
+tbl = apply(betas,
+            2,
+            function(x)
+              return(c(mean = mean(x),
+                       sd = sd(x),
+                       RMSD = mean(x^2)^.5)))
+
+kable(tbl,
+      digits = 2,
+      caption = "Mean, SD and RMSD for adjusted and IPW regressions.")
+```
+
+The issue here is that estimates from the IPW analysis vary more around the true value of zero. Therefore, the expected root mean square deviation (RMSD ^[we could also have calculated the means squared error, MSE]) for any analysis is larger for the IPW regression compared to the adjusted regression.
+
+
+## When adjustment cannot close the path opened by conditioning on a collider, IPW still corrects for bias
+
+In the previous models selection bias was relatively easy to correct, because there was a common ob severed cause (fork) $L$ on the backdoor path from $X$ to $Y$ which one could adjust for (condition on) so as to close the back-door path. However, there are situations in which this does not work. In the following example the backdoor path is opened through conditioning on a parent of the selection variable, and adjustment cannot close the path again because the other variable on the backdoor path is an _unobserved_ common causes. For this situation, adjustment and weighting perform as follows:
+
+```{r SIMSelDAGcolU1 , fig.cap="\\label{fig:weight} Simulation of loss to follow up bias and IPW weighting", fig.width=4, fig.height=5}
+betas = matrix(NA, ncol = 3, nrow = K)
+colnames(betas) = c("unadjusted","adjusted","IPW")
+
+for (k in 1:K) {
+  dt = sim_dag(selDAGcolU1)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L)
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X,     dts, weights = IPW))[2]
+}
+
+plot_daghist(selDAGcolU1,
+             betas, 
+             curves = F)
+```
+
+The previous figure showed a cases of loss to follow up (The exposure is a cause of a participation predictor), where bias that can only be adjusted by inverse probability of participation weighting. The next figure shows the same for bias due to self selection into a study.
+
+```{r SIMSelectionLcolliderAdjvsWght, fig.cap="\\label{fig:weight} Simulation of selection bias and IPW weighting", fig.width=4, fig.height=5}
+betas = matrix(NA, ncol = 3, nrow = K)
+colnames(betas) = c("unadjusted","adjusted","IPW")
+
+for (k in 1:K) {
+  dt = sim_dag(selDAGcolU2)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L)
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X,     dts, weights = IPW))[2]
+}
+
+plot_daghist(selDAGcolU2,
+             betas)
+```
+
+Note that in this case adjustment in fact introduces _more_ bias, because $L$ is a collider and conditioning on a collider introduces bias. If only one of the unobserved common causes $U1$ and $U2$ were observed, adjustment for this observed variable would also correct bias.
+
+## Correcting for confounding and loss to follow up
+
+In the simplest case, the confounding variable L is also on the backdoor path via the conditioned upon collider
+
+```{r SIMconfsel, fig.cap="\\label{fig:weight} Simulation of bias due to confounding and selection (b)", fig.width=4, fig.height=6}
+
+conselDAG = dagitty("dag {
+S A @0,-1
+X E @-.65,0
+Y O @.65,0
+L 1 @0,1
+
+L Y X S
+")
+
+
+betas = matrix(NA, ncol = 3, nrow = K)
+colnames(betas) = c("unadjusted","adjust L","IPW")
+for (k in 1:K) {
+  dt = sim_dag(conselDAG)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L)
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X    , dts, weights = IPW))[2]
+}
+plot_daghist(conselDAG,
+             betas)
+
+```
+
+This simulation and figure illustrate again that it is sufficient to close the path between $X$ and $Y$, which is here achieved by adjusting for $L2$
+
+## Correcting for confounding and loss to follow up when the participation predictor is a collider
+
+Because it is sufficient to close a backdoor path at any location, adjustment for a confounder $L$ can sometimes be sufficient to remove bias even when conditioning on a collider $L2$ (or its child) leads to selection bias. The next figure shows an example.
+
+
+```{r SIMSelConfLonPath2x, fig.cap="\\label{fig:weight} Simulation of bias due to confounding and selection (a)", fig.width=4, fig.height=6}
+selconfonPathDAG = dagitty("
+X  E @0.00,0
+L2 1 @0.25,0
+L  1 @0,.25
+S  A @0.5,0
+Y  O @1.00,0
+U  U @0,-.25
+
+U  Y L2
+L2 S
+L  X Y L2
+")
+
+betas = matrix(NA, ncol = 3, nrow = K)
+colnames(betas) = c("unadjusted","adjust L","IPW + aL")
+for (k in 1:K) {
+  dt = sim_dag(selconfonPathDAG)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L2)
+  betas[k,1] = coef(lm(Y ~ X,     dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X + L, dts, weights = IPW))[2]
+}
+plot_daghist(selconfonPathDAG,
+             betas,
+             curves = F)
+```
+
+
+Finally, we can look at a situation with confounding and loss to follow up, where selection bias is a collider for two unobserved variables $U1$ and $U2$ that are on a backdoor path from $X$ to $Y$:
+
+```{r SIMselconfonPathDAGU, fig.cap="\\label{fig:selcol}Selection bias with L as a collider", fig.width=4, fig.height=6}
+betas = matrix(NA, ncol = 4, nrow = K)
+colnames(betas) = c("unadjusted","adjusted","IPW","IPW+adj")
+for (k in 1:K) {
+  dt = sim_dag(selconfonPathDAGU)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L2)
+  betas[k,1] = coef(lm(Y ~ X,          dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L2 + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X,          dts, weights = IPW))[2]
+  betas[k,4] = coef(lm(Y ~ X + L,      dts, weights = IPW))[2]
+}
+plot_daghist(selconfonPathDAGU,
+             betas,
+             curves = F)
+```
+
+As expected, only an analysis that adjusts for $L$ and uses inverse probability of participation weights from a regression of participation on $L2$ removes bias. If such a scenario is plausible depends on the context of the study. Such a scenario does seem plausible for observational studies on treatment effects in cohort studies with loss to follow up. Specifically the nodes could represent following variables
+
+* $X$: ADHD treatment
+* $Y$: later ADHD symptoms
+* $L$: earlier ADHD symptoms
+* $L2$: parental education
+* $U1$: unobserved common environmental causes like the strength of a social support network
+* $U2$: unobserved common genetic causes of education and ADHD symptoms 
+
+The same holds when $U2$ predicts $L$ and $L2$, i.e. when common genetic causes of education and ADHD symptoms (co-) determine early ADHD symptoms and parental education.
+
+```{r SIMselconfonPathDAGUb, fig.cap="\\label{fig:selcol}Selection bias with L as a collider", fig.width=4, fig.height=6}
+selconfonPathDAGUb = dagitty("
+X  E @0.00,0
+L2 1 @0.50,0
+L  1 @0.50,.5
+S  A @0.75,0
+Y  O @1.00,0
+U1 U @0.25,0
+U2 U @0.5,.25
+
+U1 X L2
+U2 Y L L2
+L2 S
+L X Y
+")
+
+
+betas = matrix(NA, ncol = 4, nrow = K)
+colnames(betas) = c("unadjusted","adjusted","IPW","IPW+adj")
+for (k in 1:K) {
+  dt = sim_dag(selconfonPathDAGUb)
+  dts = dt[P == T]
+  IPW = get_ipws(dt$P,dt$L2)
+  betas[k,1] = coef(lm(Y ~ X,          dts))[2]
+  betas[k,2] = coef(lm(Y ~ X + L2 + L, dts))[2]
+  betas[k,3] = coef(lm(Y ~ X,          dts, weights = IPW))[2]
+  betas[k,4] = coef(lm(Y ~ X + L,      dts, weights = IPW))[2]
+}
+plot_daghist(selconfonPathDAGUb,
+             betas,
+             curves = F)
+```
+
+## Correcting for self selection and loss to follow with no oberved common causes on backdoor paths
+
+In the previous examples of simultaneous control of two bias at least one bias could generally be controlled through adjustment. However, there are also situations with two types of selection bias (self selection and loss to follow up) that each need to be controlled through inverse probability weighting. In this case, we need to weight the study sample for which we have both exposure and outcome data by the inverse of the probability to participate and to stay in the study. That is, we have to combine two probabilities in order to obtain weights. If probabilities for loss to follow up and self selection into the study are independent, the joint probability can simply be obtained by multiplying the single event probabilities. However, if the probabilities are dependent, as would e.g. be the case when the same variables predict participation and loss to follow up, one should in theory take this dependence into account. If $I$ and $F$ are the _Inclusion_ and _Follow up_ events, the  joint probability $P(F \land I) = P(I)*P(F|I)$ ^[or $P(F)*P(I|F)$]. Here, $P(F|I)$ is the probability for follow up given inclusion, which is what we obtain from a selection model for loss to follow up, because this uses data from participants that started the study ($P(I) = 1$). Therefor we can calculate weights for the joint probability of inclusion and continuation as the reciprocal of the product of participation and follow up probabilities, or more directly as the product of the invervse probability weights for participation (`IPPW`) and follow up (`IPFW`):
+
+```{r IPWjoint}
+dt = sim_dag(sellossDAGcol,sigma_S = 2)
+dts = dt[P1 == T & P2 == T]
+  
+X = as.matrix(dt[,c("L1","L2","X"),with = T])
+IPPW = get_ipws(dt[,P1],X[,1])
+IPFW = get_ipws(dt[P1 == T,P2],X[dt$P1 == T,2])
+IPPW = IPPW[dt[P1 == T,P2]]
+IPPFW = IPPW*IPFW
+  
+PP = mean(dt[,P1])/IPPW
+FP = mean(dt[P1 == T,P2])/IPFW
+```
+
+Lets check if the products of simulated and estimated participation and follow up probabilities are correlated:
+
+```{r}
+
+obs_joint = inv.logit(dt[P2 == T,S1])*inv.logit(dt[P2 == T,S2])
+est_joint = PP*FP
+ttl = paste("r = ", round(cor(obs_joint,est_joint),digits = 2))
+plot(obs_joint,
+     est_joint,
+     main = ttl)
+abline(lm(est_joint~obs_joint),
+       col = "red")
+
+```
+
+While this correlation is not very high, it is what can be expected given the data generating process according to which $L1$ and $L2$ explain only 50% of the variance of the participation and follow up probabilities, respectively.
+
+
+```{r}
+par (mar=c(3,3,2,1), mgp=c(2,.7,0), tck=-.01)
+dt$col = "grey75"
+dt[P1 == T,col := ifelse(P2 == T,"grey25","grey50")]
+
+plot(dt$X,dt$Y, pch = 16, col = "grey",
+     xaxt = "n", yaxt = "n", bty = "n")
+points(dts$X,dts$Y,cex  = IPPFW, col = "red", xpd = T)
+legend("topleft",
+        col  = c("grey","red"),
+        pch = c(16,1),
+        legend = c("Population","Follow up sample"),
+       bty = "n")
+```
+
+We can also examine the weighted sample to check if if can match the full sample. We see that cases in the lower left corner are weighted up and those in the top right corner are weighte down. However, it looks as if there remain too many participants with a low participation probability that could be weighted up to to match the full sample so that there likely remains some bias.
+
+To check if balancing was sucessfull, we can compare statistics from population and the weighted sample:
+
+```{r, results = "asis"}
+library(Hmisc)
+my_stats = rbind(
+c(mean(dt$X),weighted.mean(dts$X,w = IPPFW),mean(dts$X)),
+c(var(dt$X),wtd.var(dts$X,w = IPPFW),var(dts$X)),
+c(mean(dt$Y),weighted.mean(dts$Y,w = IPPFW),mean(dts$Y)),
+c(var(dt$Y),wtd.var(dts$Y,w = IPPFW),var(dts$Y)),
+c(cov(cbind(dt$Y,dt$X))[2],cov.wt(cbind(dts$Y,dts$X),wt = IPPFW)$cov[2],cov(cbind(dts$Y,dts$X))[2])
+)
+
+colnames(my_stats) = c("population","weighted sample","sample")
+rownames(my_stats) = c("mean(X)","var(X)","mean(Y)","var(Y)","cov(X,Y)")
+kable(my_stats,digits = 3)
+
+```
+
+
+
+## Which DAG is the right one? Checking implied conditional independencies
+
+So far, we have seen a number of different DAGs that encode different hypothesis about the data generating process. When choosing the adjustment method based on a hypothesized DAG, it is important to verify that the available data are consistent with it. Most importantly, if one erroneously assumes that the participation indicator $L$ is not a collider, correction by adjustment can increase bias. If one assumes that $L$ is a collider and IPW is needed, but adjustment would be sufficient, then one will also get less efficient results due to the higher variance of estimates from IPW regressions.
+
+One way to test if the assumed DAG is valid, is to examine if the implied conditional independencies hold. We use the function `impliedConditionalIndependencies` from the R package `dagitty` to extract those. ^[The `dagitty` package also allows to test these assumptions. However, we do not use those because the standard null hypothesis significance tests used there are not appropriate for a situation where we really want to reject the hypothesis that there is a dependency between two variables. Instead, we use Bayesian regressions and check if the parameters are within a region of practical equivalence (ROPE) with zero.]
+
+
+Lets try this with an example:
+
+* we generate data from the last DAG presented above, according to which the data have bias due to a confounder $L$ , loss to follow up due to conditioning on the collider $L2$. 
+
+```{r, fig.height=3}
+plot_dag(selconfonPathDAGU)
+dt = sim_dag(selconfonPathDAGU)
+dts = data.frame(dt[P == T])
+```
+
+* then we tests if conditional independencies of the true model are confirmed. (the function `test_implications`, which uses Bayesian regressions can be found in the repository)
+
+```{r implications_selconfonPathDAGU, message=F, fig.height=3}
+test_implications(selconfonPathDAGU,dts)
+```
+
+The implied conditional independencies are shown on the right hand side of the plot. The green area encloses the region of practical equivalence with 0. Vertical lines indicate 90% credible intervals. These are black if the mean of the posterior or the Bayesian regression is within the ROPE and red when the mean is outside.
+
+* and lastly we test of the conditional independencies shown to be wrong if we assume a simpler, false model where $L$ is also a collider, which is however ineffective because adjusting for $L2$ closes the path between $Y$ and $X$.
+
+```{r, implications_selconfonPathDAG, message=F, results='hide', fig.height=3}
+plot_dag(selconfonPathDAG)
+test_implications(selconfonPathDAG,dts)
+```
+
+
+Whereas the test of implications does not reveal clear dependencies where there should be none for the correct model, it does shows dependencies if the hypothesized model does not match the data generating process. In particular, the wrong model assumes that $X$ and $L2$ should be independent given $L$, because it incorrectly has $L$, which we can adjust for, on the path between $X$ and $L2$.
+
+```{r bib, include=FALSE}
+# create a bib file for the R packages used in this document
+knitr::write_bib(c('base', 'rmarkdown'), file = 'skeleton.bib')
+```
