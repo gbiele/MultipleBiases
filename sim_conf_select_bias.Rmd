@@ -50,6 +50,7 @@ Tr Sy
 plot_dag(exDAG)
 ```
 
+## Mediators
 
 Often, causal relationships will be more complicated. For example, treatment effects could be mediated by parental behavior $pB$, such that the **_chain_** $Tr \rightarrow pB \rightarrow Sy$ opens a second, indirect path from $Tr$ to $Sy$.
 
@@ -68,6 +69,8 @@ plot_dag(exDAG, curves = F)
 
 If a researcher were interested only in the direct treatment effect, a statistical analysis would need to close the indirect path. When analysing the data with a regression model, this would be done by including $pB$ into a regression model. Specifically, in a regression model `lm(Sy ~ Tr)`^[This R command implements a linear regression model, where the R-formula $Sy \sim Tr$ means "regress $Sy$ on $Tr$"] the regression coefficient $\beta_{Tr}$ would estimate the total effect of treatment, and in a regression `lm(Sy ~ Tr + pB)` the coefficient $\beta_{Tr}$ would estimate the direct effect of treatment.
 
+# Confounders
+
 Another type of indirect open path between exposure and outcome involves _forks_, which occur when a third variable causes two other variables. For example, it is possible that prior symptoms $pSy$ affect if one receives a treatment and how strong the symptoms are after treatment:
 
 ```{r, fig.width=2, fig.height=2}
@@ -82,9 +85,23 @@ pSy Tr Sy
 plot_dag(exDAG, curves = F)
 ```
 
-Prior symptoms are a common cause of treatment and symptoms after treatment, and open a _backdoor path_ from treatment to symptoms. As such it can cause an association between treatment and symptoms, even if treatment does not effect symptoms. If one wants to estimate the effect from treatment on symptoms while making sure that the estimate is not "contaminated" by the common cause prior symptoms, one has to close the backdoor path $Tr \leftarrow pSy \rightarrow Sy$. This can again be done by including the variable $pSy$ in a regression model, i.e. `lm(Sy ~ Tr + pSy)`.
+Prior symptoms are a common cause of treatment and symptoms after treatment, and open a _backdoor path_ from treatment to symptoms. As such it can cause an association between treatment and symptoms, even if treatment does not effect symptoms. If one wants to estimate the effect from treatment on symptoms while making sure that the estimate is not "contaminated" by the common cause prior symptoms, one has to close the backdoor path $Tr \leftarrow pSy \rightarrow Sy$. This can again be done by including the variable $pSy$ in a regression model, i.e. `lm(Sy ~ Tr + pSy)`. In a DAG, adjustment (conditioning on) a variable is often visualized with a circle around that variable.
 
-The backdoor paths involving the _chain_ $Tr \rightarrow pB \rightarrow Sy$ or the _fork_ $Tr \leftarrow pSy \rightarrow Sy$ are open, because information can flow through $pB$ to $Sy$ or from $pSy$ to $Tr$ and $Sy$. Information cannot flow through an _inverted fork_ or _collider_, i.e. if two arrows point to third variable. For example treatment and symptoms both affect scholastic performance ($Tr \rightarrow sP \leftarrow Sy$). 
+```{r, fig.width=2, fig.height=2, echo = F}
+exDAG = dagitty("
+Tr  E @0,0
+Sy  O @1,0
+pSy A @0.5,0.5
+
+Tr  Sy
+pSy Tr Sy
+")
+plot_dag(exDAG, curves = F)
+```
+
+## Colliders
+
+The backdoor paths involving the _chain_ $Tr \rightarrow pB \rightarrow Sy$ or the _fork_ $Tr \leftarrow pSy \rightarrow Sy$ are open, because information can flow through $pB$ to $Sy$ or from $pSy$ to $Tr$ and $Sy$. Information cannot flow through an _inverted fork_ or _collider_, i.e. if two arrows point to a third variable. For example treatment and symptoms both influence scholastic performance ($Tr \rightarrow sP \leftarrow Sy$). 
 
 ```{r, fig.width=2, fig.height=2}
 exDAG = dagitty("
@@ -99,6 +116,10 @@ plot_dag(exDAG, curves = F)
 ```
 
 An analysis that wants to estimate the effect of treatment should not adjust for scholastic performance, because adjusting for (conditioning on) a collider opens the previously closed path via scholastic performance.
+
+## Absence of causal effects imply independence
+When preparing a DAG, the focus is often on measured variables. This is, however, not the right approach. Instead, a DAG should contain all important causal variables, even if they are unobserved.
+
 
 In sum, these examples should illustrate following properties of DAGs
 

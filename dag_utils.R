@@ -31,9 +31,22 @@ plot_dag = function(dag, curves = T) {
     
   
   for (k in grep("S$|S[0-9]$",tdag$name)) {
-    g = g + geom_point(data = tdag[k,],
-                       pch = 1, size = 10)
+    g = g + geom_point(data = tdag[k],
+                       pch = 1,
+                       size = 10)
   }
+  
+  adjusted_vars = sapply(grep("adjusted",
+                              strsplit(dag,"\n")[[1]],
+                              value = T),
+                         function(x)
+                           strsplit(x," ")[[1]][1])
+  
+  for (v in adjusted_vars) {
+    g = g + geom_point(data = tdag[name == v],
+                       pch = 1, size = ifelse(nchar(v)<3,10,11))
+  }
+  
   g$coordinates$clip = "off"
   return(g)
 }
